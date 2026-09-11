@@ -2,7 +2,7 @@
   const norm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/×/g,'x');
   const clearTaskEditor=()=>['taskTitle','taskDescription','taskDue','taskReminder'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});
 
-  // Make the task editor explicitly scoped to the selected node and clear stale values on navigation.
+  // Keep task UI strictly scoped to the selected node.
   const oldRenderDetail=renderDetail;
   renderDetail=function(n){
     oldRenderDetail(n);
@@ -17,7 +17,7 @@
   const oldSelectNode=selectNode;
   selectNode=function(n,open){clearTaskEditor();oldSelectNode(n,open)};
 
-  // Better routing for natural-language entries. It can create a named prospect and place it under the mentioned parent.
+  // Natural-language routing: create a prospect and place it under the parent named in the sentence.
   function findNodeByMention(text){
     const s=norm(text); let best=null;
     for(const n of N){const l=norm(n.label); if(l.length>2&&s.includes(l)&&(!best||l.length>norm(best.label).length))best=n}
@@ -71,11 +71,112 @@
     return p;
   };
 
+  // Semantic pinch navigation.
+  // A strong pinch-out exits the current universe to the global map.
+  // A strong pinch-in over a top-level universe enters it without opening the drawer.
+  let gSingle=null,gPinch=null;
+  const gVals=()=>[...pointers.values()];
+  function globalOverview(){
+    activeUniverse=null;selected=null;focusTarget=null;focusGlow=0;
+    zoom=.72;camZ=0;panX=0;panY=0;
+    document.getElementById('universeBadge')?.classList.remove('on');
+    document.getElementById('detailPanel')?.classList.remove('open');
+    renderTree();
+  }
+  function nearestUniverseAt(x,y,maxDist=250){
+    let best=null,bestD=maxDist;
+    for(const n of rootGroups()){
+      const p=project(basePosition(n)),d=Math.hypot(x-p.x,y-p.y);
+      if(d<bestD){best=n;bestD=d}
+    }
+    return best;
+  }
+  function enterByPinch(n){
+    if(!n)return;
+    selected=n.id;expanded.add(n.id);renderTree();renderDetail(n);focusOn(n);
+    document.getElementById('detailPanel')?.classList.remove('open');
+  }
+
+  C.onpointerdown=e=>{
+    C.setPointerCapture?.(e.pointerId);
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    focusTarget=null;
+    if(pointers.size===1){
+      gSingle={sx:e.clientX,sy:e.clientY,lastT:performance.now(),time:performance.now(),moved:false};
+      gPinch=null;
+    }else if(pointers.size===2){
+      const a=gVals(),cx=(a[0].x+a[1].x)/2,cy=(a[0].y+a[1].y)/2,d=Math.max(20,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y));
+      gPinch={d,cx,cy,lastCx:cx,lastCy:cy,zoom,camZ,panX,panY,startedUniverse:!!activeUniverse,minRatio:1,maxRatio:1,escaped:false};
+      gSingle=null;rotV*=.35;tiltV*=.35;
+    }
+  };
+
+  C.onpointermove=e=>{
+    if(!pointers.has(e.pointerId))return;
+    const old=pointers.get(e.pointerId),now=performance.now();
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pointers.size===1&&gSingle){
+      const dx=e.clientX-old.x,dy=e.clientY-old.y,dt=Math.max(8,now-gSingle.lastT);
+      rot+=dx*.006;tilt=Math.max(-.82,Math.min(.82,tilt+dy*.003));
+      rotV=rotV*.55+dx*.006*(16.67/dt)*.45;tiltV=tiltV*.58+dy*.003*(16.67/dt)*.42;
+      gSingle.lastT=now;if(Math.hypot(e.clientX-gSingle.sx,e.clientY-gSingle.sy)>7)gSingle.moved=true;
+    }else if(pointers.size===2&&gPinch){
+      const a=gVals(),cx=(a[0].x+a[1].x)/2,cy=(a[0].y+a[1].y)/2,d=Math.max(20,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)),ratio=d/gPinch.d;
+      gPinch.lastCx=cx;gPinch.lastCy=cy;gPinch.minRatio=Math.min(gPinch.minRatio,ratio);gPinch.maxRatio=Math.max(gPinch.maxRatio,ratio);
+
+      // Intentional fast zoom-out = go back to the whole Neural Kit universe.
+      if(gPinch.startedUniverse&&!gPinch.escaped&&ratio<.64){
+        globalOverview();
+        gPinch={d,cx,cy,lastCx:cx,lastCy:cy,zoom,camZ,panX,panY,startedUniverse:false,minRatio:1,maxRatio:1,escaped:true};
+        return;
+      }
+
+      const newZoom=Math.max(.35,Math.min(4.8,gPinch.zoom*ratio));
+      const centerX=sideW()+(W-sideW())/2,centerY=H*.46,scaleFactor=newZoom/gPinch.zoom;
+      zoom=newZoom;camZ=gPinch.camZ;
+      // Zoom around the fingers, like a map, instead of around an arbitrary camera origin.
+      panX=(gPinch.cx-centerX)-(gPinch.cx-centerX-gPinch.panX)*scaleFactor+(cx-gPinch.cx);
+      panY=(gPinch.cy-centerY)-(gPinch.cy-centerY-gPinch.panY)*scaleFactor+(cy-gPinch.cy);
+      if(activeUniverse)constrainActiveView();
+    }
+  };
+
+  function finishGesture(e){
+    const one=gSingle,pinch=gPinch,click=pointers.size===1&&one&&!one.moved&&performance.now()-one.time<350;
+    pointers.delete(e.pointerId);
+    if(click){const h=[...hit].sort((a,b)=>b.z-a.z).find(o=>Math.hypot(e.clientX-o.x,e.clientY-o.y)<o.r);if(h)selectNode(h.n,true)}
+    if(pointers.size===1){
+      const q=gVals()[0];gSingle={sx:q.x,sy:q.y,lastT:performance.now(),time:performance.now(),moved:false};gPinch=null;
+    }else if(!pointers.size){
+      gSingle=null;gPinch=null;
+      if(activeUniverse){constrainActiveView();return}
+      // On the global map, a deliberate pinch-in over a universe enters it.
+      if(pinch&&pinch.maxRatio>1.28&&zoom>1.0){
+        const target=nearestUniverseAt(pinch.lastCx,pinch.lastCy,260);
+        if(target){enterByPinch(target);return}
+      }
+      // Very wide zoom-out always settles into a clean global overview.
+      if(zoom<.5)focusTarget={zoom:.72,panX:0,panY:0,camZ:0};
+    }
+  }
+  C.onpointerup=finishGesture;
+  C.onpointercancel=finishGesture;
+  C.onwheel=e=>{
+    e.preventDefault();
+    const next=Math.max(.35,Math.min(4.8,zoom*Math.exp(-e.deltaY*.0012)));
+    if(activeUniverse&&next<.9){globalOverview();return}
+    zoom=next;if(activeUniverse)constrainActiveView();
+  };
+
+  // Extra throw sampling gives the one-finger orbit a physical fling on iPad.
   let throwState=null;
   C.addEventListener('pointerdown',e=>{if(pointers.size<=1)throwState={x:e.clientX,y:e.clientY,t:performance.now(),vx:0,vy:0}},true);
   C.addEventListener('pointermove',e=>{if(!throwState||pointers.size>1)return;const now=performance.now(),dt=Math.max(8,now-throwState.t),dx=e.clientX-throwState.x,dy=e.clientY-throwState.y;throwState.vx=throwState.vx*.55+(dx/dt)*.45;throwState.vy=throwState.vy*.55+(dy/dt)*.45;throwState.x=e.clientX;throwState.y=e.clientY;throwState.t=now},true);
   C.addEventListener('pointerup',()=>{if(!throwState)return;rotV+=Math.max(-.085,Math.min(.085,throwState.vx*.055));tiltV+=Math.max(-.03,Math.min(.03,throwState.vy*.018));throwState=null},true);
   C.addEventListener('pointercancel',()=>{throwState=null},true);
+
+  const hint=document.querySelector('.hint');
+  if(hint)hint.textContent='1 dedo: orbitar · pellizca hacia afuera: ver todo · pellizca hacia adentro: entrar';
 
   const oldReset=resetUniverse;
   resetUniverse=function(){oldReset();clearTaskEditor()};
