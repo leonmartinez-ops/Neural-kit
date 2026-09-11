@@ -1,0 +1,46 @@
+name: Refine gesture navigation
+
+on:
+  push:
+    paths:
+      - '.github/workflows/refine-gesture-navigation.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refine pinch navigation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('index.html')
+          s=p.read_text()
+          old=r"let single=null,gesture=null;function vals\(\)\{return\[\.\.\.pointers\.values\(\)\]\}.*?C\.onwheel=e=>\{e\.preventDefault\(\);zoom=Math\.max\(activeUniverse\?\.62:\.35,Math\.min\(4\.6,zoom\*Math\.exp\(-e\.deltaY\*\.0012\)\)\);constrainActiveView\(\)\};"
+          new=r'''let single=null,gesture=null;function vals(){return[...pointers.values()]}
+function showOverviewFromPinch(){activeUniverse=null;selected=null;focusTarget=null;focusGlow=0;zoom=.72;camZ=0;panX=0;panY=0;$('universeBadge').classList.remove('on');$('detailPanel').classList.remove('open');renderTree()}
+function nearestRootTo(x,y,maxDist=230){let best=null,dist=maxDist;for(const n of rootGroups()){let p=project(basePosition(n)),d=Math.hypot(x-p.x,y-p.y);if(d<dist){dist=d;best=n}}return best}
+function enterUniverseByPinch(n){if(!n)return;selected=n.id;expanded.add(n.id);renderTree();renderDetail(n);focusOn(n);$('detailPanel').classList.remove('open')}
+C.onpointerdown=e=>{C.setPointerCapture?.(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});focusTarget=null;if(pointers.size===1){single={sx:e.clientX,sy:e.clientY,lastT:performance.now(),time:performance.now(),moved:false};gesture=null}else if(pointers.size===2){let a=vals(),cx=(a[0].x+a[1].x)/2,cy=(a[0].y+a[1].y)/2,d=Math.max(20,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y));gesture={d,cx,cy,lastCx:cx,lastCy:cy,zoom,camZ,panX,panY,startedUniverse:!!activeUniverse,minRatio:1,maxRatio:1,escaped:false};single=null;rotV*=.35;tiltV*=.35}};
+C.onpointermove=e=>{if(!pointers.has(e.pointerId))return;let old=pointers.get(e.pointerId),now=performance.now();pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1&&single){let dx=e.clientX-old.x,dy=e.clientY-old.y,dt=Math.max(8,now-single.lastT);rot+=dx*.006;tilt=Math.max(-.82,Math.min(.82,tilt+dy*.003));rotV=rotV*.55+dx*.006*(16.67/dt)*.45;tiltV=tiltV*.58+dy*.003*(16.67/dt)*.42;single.lastT=now;if(Math.hypot(e.clientX-single.sx,e.clientY-single.sy)>7)single.moved=true}else if(pointers.size===2&&gesture){let a=vals(),cx=(a[0].x+a[1].x)/2,cy=(a[0].y+a[1].y)/2,d=Math.max(20,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)),ratio=d/gesture.d;gesture.lastCx=cx;gesture.lastCy=cy;gesture.minRatio=Math.min(gesture.minRatio,ratio);gesture.maxRatio=Math.max(gesture.maxRatio,ratio);
+if(gesture.startedUniverse&&!gesture.escaped&&ratio<.62){showOverviewFromPinch();gesture={d,cx,cy,lastCx:cx,lastCy:cy,zoom,camZ,panX,panY,startedUniverse:false,minRatio:1,maxRatio:1,escaped:true};return}
+let newZoom=Math.max(.35,Math.min(4.8,gesture.zoom*ratio)),centerX=sideW()+(W-sideW())/2,centerY=H*.46,scaleFactor=newZoom/gesture.zoom;zoom=newZoom;camZ=gesture.camZ;panX=(gesture.cx-centerX)-(gesture.cx-centerX-gesture.panX)*scaleFactor+(cx-gesture.cx);panY=(gesture.cy-centerY)-(gesture.cy-centerY-gesture.panY)*scaleFactor+(cy-gesture.cy);if(activeUniverse)constrainActiveView()}};
+function end(e){let st=single,g=gesture,click=pointers.size===1&&st&&!st.moved&&performance.now()-st.time<350;pointers.delete(e.pointerId);if(click){let h=[...hit].sort((a,b)=>b.z-a.z).find(o=>Math.hypot(e.clientX-o.x,e.clientY-o.y)<o.r);if(h)selectNode(h.n,true)}if(pointers.size===1){let q=vals()[0];single={sx:q.x,sy:q.y,lastT:performance.now(),time:performance.now(),moved:false};gesture=null}else if(!pointers.size){single=null;gesture=null;if(activeUniverse){constrainActiveView()}else if(g){if(g.maxRatio>1.30&&zoom>1.0){let target=nearestRootTo(g.lastCx,g.lastCy,250);if(target){enterUniverseByPinch(target);return}}if(zoom<.48){focusTarget={zoom:.72,panX:0,panY:0,camZ:0}}}}}
+C.onpointerup=end;C.onpointercancel=end;C.onwheel=e=>{e.preventDefault();let next=Math.max(.35,Math.min(4.8,zoom*Math.exp(-e.deltaY*.0012)));if(activeUniverse&&next<.9){showOverviewFromPinch();return}zoom=next;if(activeUniverse)constrainActiveView()};'''
+          s2,n=re.subn(old,new,s,flags=re.S)
+          if n != 1:
+              raise SystemExit(f'gesture block replacement count={n}')
+          s2=s2.replace('1 dedo: orbitar · 2 dedos: mover + pellizcar · entra a un universo','1 dedo: orbitar · pellizca hacia afuera: ver todo · pellizca hacia adentro: entrar')
+          p.write_text(s2)
+          PY
+      - name: Commit refined gestures
+        run: |
+          git config user.name "Neural Kit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add index.html
+          git commit -m "Refine semantic pinch navigation" || exit 0
+          git push
