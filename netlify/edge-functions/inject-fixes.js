@@ -3,10 +3,13 @@ export default async (request, context) => {
   const type = response.headers.get('content-type') || '';
   if (!type.includes('text/html')) return response;
   let html = await response.text();
-  if (!html.includes('/neural-fixes.js')) {
-    html = html.replace('</body>', '<script src="/neural-fixes.js?v=20260911-0217"></script></body>');
-  } else {
-    html = html.replace(/\/neural-fixes\.js\?v=[^"']+/g, '/neural-fixes.js?v=20260911-0217');
+  const fixes = '<script src="/neural-fixes.js?v=20260911-1049"></script>';
+  const ui3 = '<script src="/neural-ui-v3.js?v=20260911-1120"></script>';
+  if (!html.includes('/neural-fixes.js')) html = html.replace('</body>', fixes + ui3 + '</body>');
+  else {
+    html = html.replace(/<script src="\/neural-fixes\.js\?v=[^"]+"><\/script>/g, fixes);
+    if (!html.includes('/neural-ui-v3.js')) html = html.replace('</body>', ui3 + '</body>');
+    else html = html.replace(/<script src="\/neural-ui-v3\.js\?v=[^"]+"><\/script>/g, ui3);
   }
   const headers = new Headers(response.headers);
   headers.delete('content-length');
